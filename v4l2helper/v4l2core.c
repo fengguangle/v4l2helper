@@ -9,6 +9,8 @@
 #include <assert.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <time.h>
+#include <sys/time.h>
 
 int xioctl(int fd, int request, void* argp)
 {
@@ -23,6 +25,24 @@ int xioctl(int fd, int request, void* argp)
 static void errno_show(const char* s)
 {
 	fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
+}
+
+static int readInit(v4l2_dev_t *vd)
+{
+        vd->buffers = calloc(1, sizeof(*vd->buffers));
+
+        if (!vd->buffers) {
+                fprintf(stderr, "Out of memory\\n");
+                return -1;
+        }
+
+        vd->buffers[0].length = vd->buffer_size;
+        vd->buffers[0].start = malloc(vd->buffer_size);
+
+        if (!vd->buffers[0].start) {
+                fprintf(stderr, "Out of memory\\n");
+                return -1;
+        }
 }
 
 static int mmapInit(v4l2_dev_t *vd)
@@ -80,6 +100,45 @@ static int mmapInit(v4l2_dev_t *vd)
         }
 	}
 	return 0;
+}
+
+static int userptrInit(v4l2_dev_t *vd)
+{
+	struct v4l2_requestbuffers req;
+
+        CLEAR(req);
+
+        req.count  = VIDIOC_REQBUFS_COUNT;
+        req.type   = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        req.memory = V4L2_MEMORY_USERPTR;
+
+        if (-1 == xioctl(vd->fd, VIDIOC_REQBUFS, &req)) {
+                if (EINVAL == errno) {
+                        fprintf(stderr, "%s does not support "
+                                 "user pointer i/on", vd->deviceName);
+                        return -1;
+                } else {
+                        errno_show("VIDIOC_REQBUFS");
+						return -1;
+                }
+        }
+
+        vd->buffers = calloc(req.count, sizeof(*vd->buffers));
+
+        if (!vd->buffers) {
+                fprintf(stderr, "Out of memory\\n");
+                return -1;
+        }
+
+        for (vd->n_buffers = 0; vd->n_buffers < req.count; ++vd->n_buffers) {
+                vd->buffers[vd->n_buffers].length = vd->buffer_size;
+                vd->buffers[vd->n_buffers].start = malloc(vd->buffer_size);
+
+                if (!vd->buffers[vd->n_buffers].start) {
+                        fprintf(stderr, "Out of memory\\n");
+                        return -1;
+                }
+        }
 }
 
 v4l2_dev_t* v4l2core_dev_open(const char* deviceName)
@@ -332,24 +391,33 @@ int v4l2core_dev_init(v4l2_dev_t *vd)
         vd->fps = vd->frameint.parm.capture.timeperframe.denominator/vd->frameint.parm.capture.timeperframe.numerator;
     }
 
-    switch (vd->io) {
-		case IO_METHOD_READ:
-			//readInit(fmt.fmt.pix.sizeimage);
-			break;
-		case IO_METHOD_MMAP:
-			mmapInit(vd);
-			break;
-		case IO_METHOD_USERPTR:
-			//userptrInit(fmt.fmt.pix.sizeimage);
-			break;
-	}
-
 	return 1;
 }
 
-void v4l2core_dev_uninit(v4l2_dev_t* vd)
+int v4l2core_capture_init(v4l2_dev_t *vd)
 {
-    unsigned int i;
+	switch (vd->io)
+	{
+	case IO_METHOD_READ:
+		vd->buffer_size = vd->fmt.fmt.pix.sizeimage;
+		return readInit(vd);
+		break;
+	case IO_METHOD_MMAP:
+		return mmapInit(vd);
+		break;
+	case IO_METHOD_USERPTR:
+		vd->buffer_size = vd->fmt.fmt.pix.sizeimage;
+		return userptrInit(vd);
+		break;
+	default:
+		break;
+	}
+	return -1;
+}
+
+void v4l2core_capture_uninit(v4l2_dev_t *vd)
+{
+	unsigned int i;
 	switch (vd->io) {
 		case IO_METHOD_READ:
 			free(vd->buffers[0].start);
@@ -459,14 +527,16 @@ static int frameRead(v4l2_dev_t* vd)
 				}
 			}
 
-			/*struct timespec ts;
+			struct timespec ts;
 			struct timeval timestamp;
 			clock_gettime(CLOCK_MONOTONIC,&ts);
 			timestamp.tv_sec = ts.tv_sec;
-			timestamp.tv_usec = ts.tv_nsec/1000;*/
+			timestamp.tv_usec = ts.tv_nsec/1000;
 
-			//imageProcess(vd->buffers[0].start,timestamp);
-			dataProcess(vd,vd->buffers[buf.index].start,buf.bytesused,buf.timestamp);
+			dataProcess(vd,vd->buffers[0].start,vd->buffers[0].length,timestamp);
+			if(vd->VBuffCallback){
+                vd->VBuffCallback((char*)vd->buffers[0].start,vd->buffers[0].length);
+            }
 			break;
 		case IO_METHOD_MMAP:
 			CLEAR(buf);
@@ -514,12 +584,14 @@ static int frameRead(v4l2_dev_t* vd)
 							// fall through
 
 						default:
+							errno_show("VIDIOC_DQBUF");
 							return -1;
 					}
 				}
 
 				for (i = 0; i < vd->n_buffers; ++i)
-					if (buf.m.userptr == (unsigned long)vd->buffers[i].start && buf.length == vd->buffers[i].length)
+					if (buf.m.userptr == (unsigned long)vd->buffers[i].start 
+					&& buf.length == vd->buffers[i].length)
 						break;
 
 				assert (i < vd->n_buffers);
@@ -528,7 +600,10 @@ static int frameRead(v4l2_dev_t* vd)
 				dataProcess(vd,vd->buffers[buf.index].start,buf.bytesused,buf.timestamp);
 
 				if (-1 == ioctl(vd->fd, VIDIOC_QBUF, &buf))
+				{
+					errno_show("VIDIOC_QBUF");
 					return -1;
+				}
 				break;
 	}
 	return 1;

@@ -19,12 +19,18 @@ static unsigned int bUpgrade = 0;
 
 void* thread_task_capture(void)
 {
+    if(v4l2core_capture_init(vd)<0)
+    {
+        puts("Capture init error.");
+        pthread_exit(NULL);
+    }
     if(v4l2core_capture_start(vd)<0)
     {
         puts("Can not start capture");
         pthread_exit(NULL);
     }
     v4l2core_capture_loop(vd);
+    v4l2core_capture_uninit(vd);
     v4l2core_capture_stop(vd);
     pthread_exit(NULL);
 }
@@ -139,8 +145,6 @@ int main(int argc,char **argv)
     }
 
     pthread_join(tid_capture,NULL);
-
-    v4l2core_dev_uninit(vd);
     v4l2core_dev_close(vd);
 
     return 0;

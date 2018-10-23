@@ -53,6 +53,7 @@ typedef struct v4l2_dev_t{
     io_method    io;
     buffer*      buffers;
     unsigned int n_buffers;
+    unsigned int buffer_size;
 
     ProcessVBuff VBuffCallback;
     unsigned int bcapture;
@@ -67,7 +68,9 @@ void v4l2core_dev_close(v4l2_dev_t *vd);
 
 int v4l2core_dev_init(v4l2_dev_t* vd);
 
-void v4l2core_dev_uninit(v4l2_dev_t* vd);
+int v4l2core_capture_init(v4l2_dev_t *vd);
+
+void v4l2core_capture_uninit(v4l2_dev_t *vd);
 
 int v4l2core_capture_start(v4l2_dev_t* vd);
 
