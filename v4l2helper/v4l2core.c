@@ -151,6 +151,7 @@ v4l2_dev_t* v4l2core_dev_open(const char* deviceName)
     vd->deviceName = strdup(deviceName);
     vd->width = 0;
     vd->height = 0;
+	vd->p_frameDesc = NULL;
 
     struct stat st;
 	// stat file
@@ -191,42 +192,20 @@ void v4l2core_dev_close(v4l2_dev_t *vd)
     }
 }
 
-void enum_frame_sizes(v4l2_dev_t *vd,uint32_t pixfmt)
+void enum_frame_sizes(v4l2_dev_t *vd,uint32_t pixfmt,FrameDesc* pframeDesc)
 {
-    puts("\t\tSupport frame size:");
     vd->frmsozeenum.index=0;
     vd->frmsozeenum.pixel_format = pixfmt;
     while(ioctl(vd->fd,VIDIOC_ENUM_FRAMESIZES,&vd->frmsozeenum)!=-1)
     {
+		FrameSize* frm = (FrameSize*)malloc(sizeof(FrameSize));
+		memset(frm,0,sizeof(FrameSize));
+		if(frm)
+		{
+			memcpy(&frm->frmsizeenum,&vd->frmsozeenum,sizeof(vd->frmsozeenum));
+			DL_APPEND(pframeDesc->pframeSize,frm);
+		}
         vd->frmsozeenum.index++;
-        if (vd->frmsozeenum.type == V4L2_FRMSIZE_TYPE_DISCRETE)
-        {
-            printf("\t\t{ discrete: width = %u, height = %u }\n",
-                       vd->frmsozeenum.discrete.width, vd->frmsozeenum.discrete.height);
-        }
-        else if (vd->frmsozeenum.type == V4L2_FRMSIZE_TYPE_CONTINUOUS || vd->frmsozeenum.type == V4L2_FRMSIZE_TYPE_STEPWISE)
-        {
-            if(vd->frmsozeenum.type == V4L2_FRMSIZE_TYPE_CONTINUOUS)
-                printf("\t\t{ continuous: min { width = %u, height = %u } .. "
-                       "max { width = %u, height = %u } }\n",
-                       vd->frmsozeenum.stepwise.min_width, vd->frmsozeenum.stepwise.min_height,
-                       vd->frmsozeenum.stepwise.max_width, vd->frmsozeenum.stepwise.max_height);
-            else
-                printf("\t\t{ stepwise: min { width = %u, height = %u } .. "
-                       "max { width = %u, height = %u } / "
-                       "stepsize { width = %u, height = %u } }\n",
-                       vd->frmsozeenum.stepwise.min_width, vd->frmsozeenum.stepwise.min_height,
-                       vd->frmsozeenum.stepwise.max_width, vd->frmsozeenum.stepwise.max_height,
-                       vd->frmsozeenum.stepwise.step_width, vd->frmsozeenum.stepwise.step_height);
-        }
-        else
-        {
-            fprintf(stderr, "V4L2_CORE: fsize.type not supported: %d\n", vd->frmsozeenum.type);
-            fprintf(stderr, "    (Discrete: %d   Continuous: %d  Stepwise: %d)\n",
-                    V4L2_FRMSIZE_TYPE_DISCRETE,
-                    V4L2_FRMSIZE_TYPE_CONTINUOUS,
-                    V4L2_FRMSIZE_TYPE_STEPWISE);
-        }
     }
 }
 
@@ -301,50 +280,67 @@ int v4l2core_dev_init(v4l2_dev_t *vd)
     //emu all support fmt
     vd->fmtdesc.index=0;
     vd->fmtdesc.type=V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    printf("Support format:\n");
+    
+
     while(ioctl(vd->fd,VIDIOC_ENUM_FMT,&vd->fmtdesc)!=-1)
     {
-        printf("\t%d.%s\n",vd->fmtdesc.index+1,vd->fmtdesc.description);
-        enum_frame_sizes(vd,vd->fmtdesc.pixelformat);
+		FrameDesc* fdesc = (FrameDesc*)malloc(sizeof(FrameDesc));
+		if(!fdesc)
+			continue;		
+		fdesc->index = vd->fmtdesc.index;
+		memcpy(fdesc->description,&vd->fmtdesc.description,sizeof(fdesc->description));
+		fdesc->index = vd->fmtdesc.index;
+		fdesc->pixformat = vd->fmtdesc.pixelformat;
+		fdesc->pframeSize = NULL;
+        enum_frame_sizes(vd,vd->fmtdesc.pixelformat,fdesc);
+		DL_APPEND(vd->p_frameDesc,fdesc);
         vd->fmtdesc.index++;
     }
 
-    puts("************Current Image Formats Information************");
-    //set fmt
-#if 0
-    vd->fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if(vd->fmtType == FMT_H264){
-        vd->fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_H264;
-    }
-    else if(vd->fmtType == FMT_YUV){
-        vd->fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
-    }
-    else if(vd->fmtType == FMT_MJPEG){
-        vd->fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
-    }
-    vd->fmt.fmt.pix.height = vd->height;
-    vd->fmt.fmt.pix.width = vd->width;
-    if(vd->fmtType == FMT_YUV)
-        vd->fmt.fmt.pix.field = V4L2_FIELD_INTERLACED;
+	FrameDesc* elt;
+	FrameSize* elt2;
+	int count;
+	DL_COUNT(vd->p_frameDesc,elt,count);
+	printf("Support format (%d):\n",count);
+	DL_FOREACH(vd->p_frameDesc,elt) {
+		printf("\t%d.%s\n",elt->index, elt->description);
+		DL_COUNT(elt->pframeSize,elt2,count);
+		printf("\t\tSupport frame size (%d):\n",count);
+		DL_FOREACH(elt->pframeSize,elt2)
+		{
+			if (elt2->frmsizeenum.type == V4L2_FRMSIZE_TYPE_DISCRETE)
+			{
+				printf("\t\t{ discrete: width = %u, height = %u }\n",
+					   elt2->frmsizeenum.discrete.width, elt2->frmsizeenum.discrete.height);
+			}
+			else if (elt2->frmsizeenum.type == V4L2_FRMSIZE_TYPE_CONTINUOUS || elt2->frmsizeenum.type == V4L2_FRMSIZE_TYPE_STEPWISE)
+			{
+				if (elt2->frmsizeenum.type == V4L2_FRMSIZE_TYPE_CONTINUOUS)
+					printf("\t\t{ continuous: min { width = %u, height = %u } .. "
+						   "max { width = %u, height = %u } }\n",
+						   elt2->frmsizeenum.stepwise.min_width, elt2->frmsizeenum.stepwise.min_height,
+						   elt2->frmsizeenum.stepwise.max_width, elt2->frmsizeenum.stepwise.max_height);
+				else
+					printf("\t\t{ stepwise: min { width = %u, height = %u } .. "
+						   "max { width = %u, height = %u } / "
+						   "stepsize { width = %u, height = %u } }\n",
+						   elt2->frmsizeenum.stepwise.min_width, elt2->frmsizeenum.stepwise.min_height,
+						   elt2->frmsizeenum.stepwise.max_width, elt2->frmsizeenum.stepwise.max_height,
+						   elt2->frmsizeenum.stepwise.step_width, elt2->frmsizeenum.stepwise.step_height);
+			}
+			else
+			{
+				fprintf(stderr, "V4L2_CORE: fsize.type not supported: %d\n", elt2->frmsizeenum.type);
+				fprintf(stderr, "    (Discrete: %d   Continuous: %d  Stepwise: %d)\n",
+						V4L2_FRMSIZE_TYPE_DISCRETE,
+						V4L2_FRMSIZE_TYPE_CONTINUOUS,
+						V4L2_FRMSIZE_TYPE_STEPWISE);
+			}
+		}
+	}
+	
 
-    if(xioctl(vd->fd, VIDIOC_S_FMT, &vd->fmt) == -1)
-    {
-        printf("Unable to set format\n");
-        return;
-    }
-#endif
-#if 0 //wangkai ceshi
-    vd->fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    vd->fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
-    vd->fmt.fmt.pix.height = 1080;
-    vd->fmt.fmt.pix.width = 1920;
-    if(xioctl(vd->fd, VIDIOC_S_FMT, &vd->fmt) == -1)
-    {
-        printf("Unable to set format\n");
-        return;
-    }
-    printf("Set format success.\n");
-#endif
+    puts("************Current Image Formats Information************");
     //get fmt
     vd->fmtack.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if(xioctl(vd->fd, VIDIOC_G_FMT, &vd->fmtack) == -1)
@@ -365,24 +361,12 @@ int v4l2core_dev_init(v4l2_dev_t *vd)
          vd->height = vd->fmtack.fmt.pix.height;
 
     }
-    //set fps
-#if 0
-    if (vd->fps != -1)
-    {
-        CLEAR(vd->frameint);
-        /* Attempt to set the frame interval. */
-        vd->frameint.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        vd->frameint.parm.capture.timeperframe.numerator = 1;
-        vd->frameint.parm.capture.timeperframe.denominator = vd->fps;
-        if (-1 == xioctl(vd->fd, VIDIOC_S_PARM, &vd->frameint))
-          fprintf(stderr,"Unable to set frame interval.\n");
-    }
-#endif
+
     //get fps
     CLEAR(vd->frameint);
     vd->frameint.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (-1 == xioctl(vd->fd, VIDIOC_G_PARM, &vd->frameint)){
-        fprintf(stderr,"Unable to set frame interval.\n");
+        fprintf(stderr,"Unable to get frame interval.\n");
     }
     else
     {
@@ -392,6 +376,36 @@ int v4l2core_dev_init(v4l2_dev_t *vd)
     }
 
 	return 1;
+}
+
+int v4l2core_dev_set_fmt(v4l2_dev_t* vd,uint32_t pixfmt,uint32_t width,uint32_t height)
+{
+	CLEAR(vd->fmt);
+	vd->fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    vd->fmt.fmt.pix.pixelformat = pixfmt;
+	vd->fmt.fmt.pix.width = width;
+    vd->fmt.fmt.pix.height = height;    
+    if(xioctl(vd->fd, VIDIOC_S_FMT, &vd->fmt) == -1)
+    {
+        printf("Unable to set format\n");
+        return -1;
+    }
+    printf("Set format success.\n");
+	return 0;
+}
+
+int v4l2core_dev_set_fps(v4l2_dev_t* vd,uint32_t numerator,uint32_t denominator)
+{
+	CLEAR(vd->frameint);
+	vd->frameint.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+	vd->frameint.parm.capture.timeperframe.numerator = 1;
+	vd->frameint.parm.capture.timeperframe.denominator = vd->fps;
+	if (-1 == xioctl(vd->fd, VIDIOC_S_PARM, &vd->frameint))
+	{
+		fprintf(stderr, "Unable to set frame interval.\n");
+		return -1;
+	}
+	return 0;
 }
 
 int v4l2core_capture_init(v4l2_dev_t *vd)

@@ -2,6 +2,8 @@
 #define V4L2CORE_H_INCLUDED
 
 #include <linux/videodev2.h>
+#include "utlist.h"
+#include "stdint.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,6 +30,25 @@ typedef struct buffer {
         void *                  start;
         unsigned int            length;
 } buffer;
+
+typedef struct DeviceCap{
+    uint8_t isSupportCapture;
+    uint8_t isSupportStreaming;
+    uint8_t isSupportRead;
+}DeviceCap;
+
+typedef struct FrameSize{
+    struct FrameSize *prev, *next;
+    struct v4l2_frmsizeenum frmsizeenum;
+}FrameSize;
+
+typedef struct FrameDesc{
+    struct FrameDesc *prev, *next;
+    uint8_t         index;
+    char            description[32];
+    unsigned int    pixformat;
+    FrameSize*      pframeSize;
+}FrameDesc;
 
 typedef struct v4l2_dev_t{
     //device
@@ -58,6 +79,9 @@ typedef struct v4l2_dev_t{
     ProcessVBuff VBuffCallback;
     unsigned int bcapture;
 
+    FrameDesc*  p_frameDesc;
+    DeviceCap   deviceCap;
+
 } v4l2_dev_t;
 
 int xioctl(int fd, int request, void* argp);
@@ -67,6 +91,10 @@ v4l2_dev_t* v4l2core_dev_open(const char* name);
 void v4l2core_dev_close(v4l2_dev_t *vd);
 
 int v4l2core_dev_init(v4l2_dev_t* vd);
+
+int v4l2core_dev_set_fmt(v4l2_dev_t* vd,uint32_t pixfmt,uint32_t width,uint32_t height);
+
+int v4l2core_dev_set_fps(v4l2_dev_t* vd,uint32_t numerator,uint32_t denominator);
 
 int v4l2core_capture_init(v4l2_dev_t *vd);
 
