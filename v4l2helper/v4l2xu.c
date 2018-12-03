@@ -58,8 +58,7 @@ uint16_t get_length_xu_control(v4l2_dev_t *vd, uint8_t unit, uint8_t selector)
 int query_xu_control(v4l2_dev_t *vd, uint8_t unit, uint8_t selector, uint8_t query, void *data)
 {
 	int err = 0;
-	//uint16_t len = get_length_xu_control(vd, unit, selector);
-    uint16_t len = 64;
+	uint16_t len = get_length_xu_control(vd, unit, selector);
 
 	struct uvc_xu_control_query xu_ctrl_query =
 	{
